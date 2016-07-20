@@ -1,0 +1,11 @@
+Agent.receive = function() {
+  var in_events = this.incomingEvents();
+  for(var i = 0; i < in_events.length; i++) 
+  {
+    output_json_object = JSON.parse(in_events[i].payload.output);
+   for(var n = 0; n < output_json_object.length; n++)
+   {
+    this.createEvent(output_json_object[n]);
+   }
+  }
+}

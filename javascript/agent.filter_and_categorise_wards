@@ -1,0 +1,28 @@
+Agent.receive = function() {
+  
+  var wards = [ {% credential wards %} ]
+  var events = this.incomingEvents();
+
+  for(var i = 0; i < events.length; i++) {
+  
+    var found = false;
+    for (var w = 0; w < wards.length; w++) {
+      
+      var re = new RegExp(wards[w],"gi");
+      if ( JSON.stringify(events[i].payload).match(re) ) {
+        
+        found = true;
+        if ((events[i].payload.ward == null) || (events[i].payload.ward.length == 0 )) {
+          events[i].payload.ward = wards[w];
+        }
+        else {
+          events[i].payload.ward = events[i].payload.ward + ',' + wards[w];
+        }
+      }
+  
+    }
+    if ( found ) {
+      this.createEvent( events[i].payload );
+    }
+  }
+}

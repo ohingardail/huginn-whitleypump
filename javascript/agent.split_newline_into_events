@@ -1,0 +1,15 @@
+Agent.receive = function() {
+  var events = this.incomingEvents();
+  var body_split = [];
+  for(var i = 0; i < events.length; i++) 
+  {
+   body_split = events[i].payload.body.split(/(?:\\?\\n|\n|$)+/);
+   for(var n = 0; n < body_split.length; n++)
+   {
+    if (body_split[n].length > 0 )
+    {
+     this.createEvent({"body":body_split[n]});
+    }
+   }
+  }
+}

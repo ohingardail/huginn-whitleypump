@@ -1,0 +1,15 @@
+Agent.check = function() {
+
+var wards = [ {% credential wards %} ];
+
+for (var i = 0; i < wards.length; i++)
+{
+  this.createEvent(
+      { 
+        "ward" : wards[i]
+      }
+  )
+}
+
+};
+

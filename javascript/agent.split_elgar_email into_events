@@ -1,0 +1,20 @@
+Agent.receive = function() {
+  var events = this.incomingEvents();
+  var re = new RegExp("Works location:","gi");
+  //var re = new RegExp(".*","gi")
+  var body_split = [];
+  for(var i = 0; i < events.length; i++) 
+  {
+   body_split = events[i].payload.body.split(/(?:(\\?\\n|\n)+(=|-|3D)(=|-|3D)+(\\?\\n|\n)+)/);
+   //body_split = events[i].payload.body;
+   //this.log(body_split)
+   for(var n = 0; n < body_split.length; n++)
+   {
+     this.log(n.toString() +" : "+ body_split[n])
+     if ( body_split[n].match(re) ) {
+      this.createEvent({"body":body_split[n]});
+     }
+   }
+   body_split = [];
+  }
+}
