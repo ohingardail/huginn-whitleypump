@@ -1,20 +1,11 @@
 #! /usr/bin/python
-# Script to list Wordpress post via XML RPC
-# Designed for use in Huginn (https://github.com/cantino/huginn) 'Shell Command Agent'
-# Example agent config :
-#{
-#  "path": "/home/huginn/scripts/",
-#  "command": "/home/huginn/scripts/wp_list_post_by_status.py --url='{% credential wp_xmlrpc %}' --user='{% credential wp_user %}' --password='{% credential wp_password %}' --status='pending'",
-#  "suppress_on_failure": "true",
-#  "suppress_on_empty_output": "true",
-#  "expected_update_period_in_days": "7"
-#}
 
-import getopt, sys
+import getopt, sys, re, json #, pprint
 from datetime import datetime
 from wordpress_xmlrpc import Client, WordPressPost
 from wordpress_xmlrpc.methods import posts, users
-import pprint
+
+#pp = pprint.PrettyPrinter(indent=1,width=80,depth=3)
 
 # manage commandline args
 try:
@@ -23,7 +14,7 @@ except getopt.GetoptError as err:
 	print(err)
 	sys.exit(2)
 
-url = ''
+url = 'https://milmanroad.wordpress.com/xmlrpc.php'
 user = None
 password = None
 status = 'pending'
@@ -40,41 +31,40 @@ for o, a in opts:
 
 # get connection to website
 try:
-	# wordpress = Client('https://whitleypump.wordpress.com/xmlrpc.php', 'whitleypump.uk@gmail.com', 'WhitleyStreet,Reading,RG20EQ')
-	# wordpress = Client('https://milmanroad.wordpress.com/xmlrpc.php', 'whitleypump.uk@gmail.com', 'WhitleyStreet,Reading,RG20EQ')
 	wordpress = Client(url, user, password)
 except:
-	print(err)
+	#print(err)
 	sys.exit(1)
 
+# get author name (users.GetUser returns Fault 401: 'Sorry, you are not allowed to edit this user.')
+authors = wordpress.call(users.GetAuthors())
+def author_name(id):
+	if len(authors) > 0:
+		for author in authors:
+			if author.id == id:
+				return author.display_name
 # get list of posts
 subject_posts = wordpress.call(posts.GetPosts({'post_status': status, 'orderby': 'date', 'order': 'ASC', 'number': 100}))
 post_count = len(subject_posts)
 
 if post_count > 0:
-	n = 0
-	JSON_string = '['
+
+	output_events = []
 	for subject_post in subject_posts:
 
-		#debug
-		#pp = pprint.PrettyPrinter(indent=1,width=80,depth=3)
-		#pp.pprint(vars(subject_post))
+		output_event = {}
+		output_event['id'] = subject_post.id
+		output_event['title'] = subject_post.title.encode('utf-8').replace('"','')
+		output_event['date'] = datetime.strftime(subject_post.date, '%d-%b-%Y %H:%M')
+		output_event['link'] = subject_post.link
+		output_event['author'] = author_name( subject_post.user ).replace('"','')
 
-		# subject_user = wordpress.call(users.GetUser(subject_post.user))
-		JSON_string = JSON_string + ' {'
-		JSON_string = JSON_string + ' "title":"' + subject_post.title.encode('utf-8') + '",'
-		JSON_string = JSON_string + ' "author":"' + subject_post.user + '",'
-		# JSON_string = JSON_string + ' "author":"' + subject_user.display_name + '"'
-		JSON_string = JSON_string + ' "link":"' + subject_post.link + '",'		
-		JSON_string = JSON_string + ' "date":"' + datetime.strftime(subject_post.date, '%d-%b-%Y %H:%M') + '"'
+		# TODO attempt to get true author if listed author is 'Whitley Pump'
+		if output_event['author'] == 'Whitley Pump' or output_event['author'] == 'Automation' :
+			real_author = re.match('^\s*(?:<i>)?\s*[Bb]y\s+(?:<a .+?>)?([^<\n]+)[<\n\.]', subject_post.content, flags=re.MULTILINE)
+			if real_author is not None :
+				output_event['author'] = real_author.group(1).encode('utf-8').replace('"','')
 
-		n = n + 1
-		if n < post_count:
-			JSON_string = JSON_string + ' },'
-		else:
-			JSON_string = JSON_string + ' }'
+		output_events.append(output_event)
 
-	JSON_string = JSON_string + ' ]'
-
-	print (JSON_string)
-
+	print json.dumps(output_events)
