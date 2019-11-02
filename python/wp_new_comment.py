@@ -1,6 +1,7 @@
 #! /usr/bin/python
 
-import getopt, sys, pprint, urlparse, time
+import getopt, sys, pprint, urlparse 
+import time as t
 from datetime import *
 import dateutil.parser
 from dateutil.tz import *
@@ -17,7 +18,7 @@ except getopt.GetoptError as err:
 	sys.exit(2)
 
 # hard coded defaults
-url = 'https://milmanroad.wordpress.com/xmlrpc.php'
+url = 'https://x.wordpress.com/xmlrpc.php'
 user = None
 password = None
 post_id = None
@@ -40,11 +41,11 @@ for o, a in opts:
 try:
 	wordpress = Client(url, user, password)
 except:
-	time.sleep(10)
+	t.sleep(10)
 	try:
 		wordpress = Client(url, user, password)
 	except:
-		time.sleep(10)
+		t.sleep(10)
 		try:
 			wordpress = Client(url, user, password)
 		except:

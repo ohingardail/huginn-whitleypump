@@ -10,8 +10,12 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.command import Command
- 
+from selenium.webdriver import FirefoxOptions
+ff_opts = FirefoxOptions()
+#ff_opts.add_argument("-headless") # can be hardcoded here or set via getopts
+
 # virtual display
 from pyvirtualdisplay import Display
 
@@ -35,12 +39,13 @@ hansard_url='https://hansard.parliament.uk/'
 mps_url=parliament_url + 'mps-lords-and-offices/mps/'
 constituency=None
 default_startdate=(datetime.now() - timedelta(days=7))
-start_date = None
+start_date = default_startdate.strftime('%Y-%m-%d')
 end_date = None
+visible=1
 
 # manage commandline args
 try:
-	opts, args = getopt.getopt(sys.argv[1:], "c:s:e:", ["constituency=", "startdate=", "enddate="])
+	opts, args = getopt.getopt(sys.argv[1:], "c:s:e:h", ["constituency=", "startdate=", "enddate=", "headless"])
 except getopt.GetoptError as err:
 	print(err)
 	sys.exit(2)
@@ -52,9 +57,14 @@ for o, a in opts:
 		start_date = a
 	if o in ("-e", "--enddate"):
 		end_date = a
+	if o in ("-h", "--headless"):
+		ff_opts.add_argument("-headless")
+		visible=0
 
 # clean up start_date
-start_date = re.sub('[\x93\x94]', '"', start_date)
+#print ('default_startdate=' + default_startdate.strftime('%Y-%m-%d') )
+#print ('start_date=' + start_date)
+#start_date = re.sub('[\x93\x94]', '"', start_date)
 start_date = re.sub(ur'[\u201c\u201d]', '"', start_date)
 start_date = start_date.replace('\\','')
 #print start_date
@@ -77,7 +87,7 @@ if start_date is not None:
 		except: 
 			startDate=default_startdate
 
-# calculate end date
+# calculate end date (max 7 days because timeouts occur if longer)
 default_enddate=(startDate + timedelta(days=7))
 if default_enddate > datetime.now():
 	default_enddate = datetime.now()
@@ -95,10 +105,15 @@ if end_date is not None:
 
 # start virtual display
 # (note that size=(800, 600) results in "portal.find_element_by_xpath("//input[@value='Go' and @type='submit']").click()" doing nothing on ubuntu 16, but not fedora
-display=Display(visible=0, size=(1600, 1200)).start() 
+#display=Display(visible=0, size=(1600, 1200)).start()
+display=Display(visible=visible, size=(1600, 1200)).start() 
 
 # 1. get MP name
-portal=webdriver.Firefox()
+portal=webdriver.Firefox(firefox_options=ff_opts)
+
+# configure wait
+wait = WebDriverWait(portal, 10);
+
 try:
 	portal.get(mps_url)
 except:
@@ -151,6 +166,7 @@ try:
 except:
 	#print('ERR: Unable to access "' + MP_parliamentary_activities + '"')
 	sys.exit(1)
+
 soup=BeautifulSoup(portal.page_source, 'html.parser')
 try:
 	MP_EDM_url=soup.find("a", {"id" : "ctlEarlyDayMotions_hypAllEDMsForMember"})['href']
@@ -160,7 +176,6 @@ if MP_EDM_url != None:
 	MP_EDM_url=parliament_url +  MP_EDM_url
 
 # 3.1 spoken contributions
-
 MP_spoken_contribs=None
 MP_spoken_contrib_objs=[]
 debate_portal=None
@@ -182,6 +197,26 @@ while MP_spoken_url is not None:
 		#print('ERR: Unable to access "' + MP_spoken_url + '"')
 		sys.exit(1)
 
+	# close modal popup, if there is one
+	#<button type="button" class="close" data-dismiss="modal" aria-hidden="true">x</button>
+	popup=None
+	try:
+		popup=portal.find_element_by_xpath("//button[@class='close']")
+	except:
+		popup=None
+	if popup is not None:
+		#time.sleep(1)
+		portal.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+		popup.click()
+
+	# wait until results loaded
+	# wait_element = wait.until(EC.text_to_be_present_in_element((By.CLASS_NAME, 'pagination-total'), 'Showing results'))
+	try:
+		wait_element = wait.until(EC.text_to_be_present_in_element((By.XPATH, '//p[@class="pagination-total"]'), 'Showing results') )
+	except:
+		wait_element = wait.until(EC.text_to_be_present_in_element((By.XPATH, '//div[@class="results-heading no-results"]/h2'), 'No results') )	
+
+	# parse page
 	soup=BeautifulSoup(portal.page_source, 'html.parser')
 
 	# extract list of contribitions
@@ -201,79 +236,92 @@ while MP_spoken_url is not None:
 
 		# get html
 		MP_spoken_contrib_soup=BeautifulSoup(str(MP_spoken_contrib), 'html.parser')
+		#print ('MP_spoken_contrib_soup=' + MP_spoken_contrib_soup.prettify() )
 
 		# assemble spoken contrib obj
-		MP_spoken_contrib_obj['spoken_contrib_url']=hansard_url + MP_spoken_contrib_soup.a['href']
-		MP_spoken_contrib_obj['spoken_contribution_id']=MP_spoken_contrib_obj['spoken_contrib_url'].split('#')[1]
-		MP_spoken_contrib_obj['debate_url']=MP_spoken_contrib_obj['spoken_contrib_url'].split('#')[0]
-		MP_spoken_contrib_obj['debate_title']=re.sub('[^\040-\176]', '', MP_spoken_contrib_soup.find("div", {"class" : "title single-line"}).span.string.strip())
-		#MP_spoken_contrib_obj['debate_location']=MP_spoken_contrib_soup.find("div", {"class" : "information"}).string.strip()
-		MP_spoken_contrib_obj['debate_date']=datetime.strptime( MP_spoken_contrib_soup.find("div", {"class" : "information"}).span.string.strip(), '%d %B %Y') #4 July 2017
+		if MP_spoken_contrib_soup.find("a") is not None:
 
-		# get debate page when list rolls over to new debate
-		if previous_debate is None or previous_debate != MP_spoken_contrib_obj['debate_url']:
+			MP_spoken_contrib_obj['spoken_contrib_url']=hansard_url + MP_spoken_contrib_soup.a['href']
+			MP_spoken_contrib_obj['spoken_contribution_id']=MP_spoken_contrib_obj['spoken_contrib_url'].split('#')[1]
+			MP_spoken_contrib_obj['debate_url']=MP_spoken_contrib_obj['spoken_contrib_url'].split('#')[0]
+			MP_spoken_contrib_obj['debate_title']=re.sub('[^\040-\176]', '', MP_spoken_contrib_soup.find("div", {"class" : "title single-line"}).span.string.strip())
+			#MP_spoken_contrib_obj['debate_location']=MP_spoken_contrib_soup.find("div", {"class" : "information"}).string.strip()
+			MP_spoken_contrib_obj['debate_date']=datetime.strptime( MP_spoken_contrib_soup.find("div", {"class" : "information"}).span.string.strip(), '%d %B %Y') #4 July 2017
 
-			# close old debate html page (if any)
-			if debate_portal is not None and get_status(debate_portal):
-				debate_portal.close()
+			# debug
+			#print "MP_spoken_contrib_obj['spoken_contrib_url']=" + MP_spoken_contrib_obj['spoken_contrib_url']
+			#print "MP_spoken_contrib_obj['spoken_contribution_id']=" + MP_spoken_contrib_obj['spoken_contribution_id']
+			#print "MP_spoken_contrib_obj['debate_url']=" + MP_spoken_contrib_obj['debate_url']
+			#print "MP_spoken_contrib_obj['debate_title']=" + MP_spoken_contrib_obj['debate_title']
+			#print "MP_spoken_contrib_obj['debate_date']=" + str(MP_spoken_contrib_obj['debate_date'])
 
-			# open new debate html page
-			debate_portal=webdriver.Firefox()
+			# get debate page when list rolls over to new debate
+			if previous_debate is None or previous_debate != MP_spoken_contrib_obj['debate_url']:
 
-			# get debate html
-			try:
-				debate_portal.get(MP_spoken_contrib_obj['debate_url'])
-			except:
-				#print('ERR: Unable to access "' + MP_spoken_contrib_obj['debate_url'] + '"')
-				sys.exit(1)
-			debate_soup=BeautifulSoup(debate_portal.page_source, 'html.parser')
+				# close old debate html page (if any)
+				if debate_portal is not None and get_status(debate_portal):
+					debate_portal.close()
+
+				# open new debate html page
+				debate_portal=webdriver.Firefox(firefox_options=ff_opts)
+
+				# get debate html
+				try:
+					debate_portal.get(MP_spoken_contrib_obj['debate_url'])
+				except:
+					#print('ERR: Unable to access "' + MP_spoken_contrib_obj['debate_url'] + '"')
+					sys.exit(1)
+				debate_soup=BeautifulSoup(debate_portal.page_source, 'html.parser')
 	
-		# extract MP's contribution detailed text
-		try:
-			MP_spoken_contrib_details=debate_soup.find("li", {"id" : MP_spoken_contrib_obj['spoken_contribution_id']}).find("div", {"class" : "inner"})
-		except:
-			MP_spoken_contrib_details=None
+			# extract MP's contribution detailed text
+			try:
+				MP_spoken_contrib_details=debate_soup.find("div", {"id" : MP_spoken_contrib_obj['spoken_contribution_id']}).find("div", {"class" : "inner"})
+			except:
+				MP_spoken_contrib_details=None
 
-		if MP_spoken_contrib_details is not None:
-			# extract contribution position in page (for later sorting)
-			MP_spoken_contrib_obj['contrib_index']=debate_portal.page_source.find(MP_spoken_contrib_obj['spoken_contribution_id'])
+			if MP_spoken_contrib_details is not None:
+				# extract contribution position in page (for later sorting)
+				MP_spoken_contrib_obj['contrib_index']=debate_portal.page_source.find(MP_spoken_contrib_obj['spoken_contribution_id'])
 
-			# note that not all <p> in target page contain text (some are empty, some are Hansard comments <em>...</em> 
-			for MP_spoken_contrib_detail in MP_spoken_contrib_details.find_all("p"):
-				#print "XX" + str(MP_spoken_contrib_detail) + "XX"
-				if MP_spoken_contrib_detail.get_text() is not None and \
-					len(MP_spoken_contrib_detail.get_text().strip()) > 0 and \
-					re.match('^<p.*?><em>.*?<\/em><\/p>$', str(MP_spoken_contrib_detail)) == None:
+				# note that not all <p> in target page contain text (some are empty, some are Hansard comments <em>...</em> 
+				for MP_spoken_contrib_detail in MP_spoken_contrib_details.find_all("p"):
+					#print "XX" + str(MP_spoken_contrib_detail) + "XX"
+					if MP_spoken_contrib_detail.get_text() is not None and \
+						len(MP_spoken_contrib_detail.get_text().strip()) > 0 and \
+						re.match('^<p.*?><em>.*?<\/em><\/p>$', str(MP_spoken_contrib_detail)) == None:
 
-					# replace bad spaces
-					text=MP_spoken_contrib_detail.get_text().replace(unichr(160), " ").strip()
+						# replace bad spaces
+						text=MP_spoken_contrib_detail.get_text().replace(unichr(160), " ").strip()
+						#print "text=" + text
 
-					# nonstandard quotes (" in string output can be problematic in JSON)
-		 			text = re.sub('[\x93\x94]', "'", text)
-					text = re.sub(ur'[\u201c\u201d]', "'", text)
-					text = re.sub('[\x91\x92]', "'", text)	
-					text = re.sub(ur'[\u2018\u2019\u201b]', "'", text)
+						# nonstandard quotes (" in string output can be problematic in JSON)
+			 			text = re.sub('[\x93\x94]', "'", text)
+						text = re.sub(ur'[\u201c\u201d]', "'", text)
+						text = re.sub('[\x91\x92]', "'", text)	
+						text = re.sub(ur'[\u2018\u2019\u201b]', "'", text)
 
-					# malformed sentence ends
-					text = re.sub('([^0-9]+)\.([^0-9]+)', '\\1. \\2', text)
+						# malformed sentence ends
+						text = re.sub('([^0-9]+)\.([^0-9]+)', '\\1. \\2', text)
 
-					# strip (some) html (get_text() already does this)
-					#text = re.sub('(<!--.*?-->|<[^>]*>)', ' ', text)
+						# strip (some) html (get_text() already does this)
+						#text = re.sub('(<!--.*?-->|<[^>]*>)', ' ', text)
 
-					# strip (some) nonprinting characters
-					text = re.sub('[^\040-\176]', ' ', text)
+						# strip (some) nonprinting characters
+						text = re.sub('[^\040-\176]', ' ', text)
 
-					if MP_spoken_contrib_obj['detailed_contrib_text'] is None:
-						MP_spoken_contrib_obj['detailed_contrib_text']=text
-					else:
-						MP_spoken_contrib_obj['detailed_contrib_text']=MP_spoken_contrib_obj['detailed_contrib_text'] + " " + text
-
+						if MP_spoken_contrib_obj['detailed_contrib_text'] is None:
+							MP_spoken_contrib_obj['detailed_contrib_text']=text
+						else:
+							MP_spoken_contrib_obj['detailed_contrib_text']=MP_spoken_contrib_obj['detailed_contrib_text'] + " " + text
 
 			# prepare for next loop
 			previous_debate=MP_spoken_contrib_obj['debate_url']
 
 			# add MP_voting_contrib to array
 			MP_spoken_contrib_objs.append(MP_spoken_contrib_obj)
+
+			#debug
+			#print "MP_spoken_contrib_obj=" + str(MP_spoken_contrib_obj)
 
 	# check if there is another page, and loop again if there is
 	MP_spoken_url=None
@@ -283,7 +331,7 @@ while MP_spoken_url is not None:
 		next=None
 	if next is not None:
 		try:
-			MP_spoken_url=hansard_url + html.find('li', {"class" :'next'}).a['href']
+			MP_spoken_url=hansard_url + soup.find('li', {"class" :'next'}).a['href']
 		except:
 			MP_spoken_url=None
 
@@ -311,6 +359,23 @@ while MP_voting_url is not None:
 		#print('ERR: Unable to access "' + MP_voting_url + '"')
 		sys.exit(1)
 
+	# close modal popup, if there is one
+	#<button type="button" class="close" data-dismiss="modal" aria-hidden="true">x</button>
+	popup=None
+	try:
+		popup=portal.find_element_by_xpath("//button[@class='close']")
+	except:
+		popup=None
+	if popup is not None:
+		portal.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+		popup.click()
+
+	# wait until results loaded
+	try:
+		wait_element = wait.until(EC.text_to_be_present_in_element((By.XPATH, '//p[@class="pagination-total"]'), 'Showing results') )
+	except:
+		wait_element = wait.until(EC.text_to_be_present_in_element((By.XPATH, '//div[@class="results-heading no-results"]/h2'), 'No results') )	
+
 	soup=BeautifulSoup(portal.page_source, 'html.parser')
 
 	# extract list of contribitions
@@ -329,29 +394,36 @@ while MP_voting_url is not None:
 
 		# extract html
 		MP_voting_contrib_soup=BeautifulSoup(str(MP_voting_contrib), 'html.parser')
+		#print ('MP_voting_contrib_soup=' + MP_voting_contrib_soup.prettify() )
 
 		# assemble voting contrib object
-		MP_voting_contrib_obj['voting_contrib_url']=hansard_url + MP_voting_contrib_soup.a['href']
-		MP_voting_contrib_obj['bill_or_debate_url']=MP_voting_contrib_obj['voting_contrib_url'].split('#')[0]
-		MP_voting_contrib_obj['bill_or_debate_title']=re.sub('[^\040-\176]', '',  MP_voting_contrib_soup.find("div", {"class" : "title single-line"}).span.string.strip())
-		MP_voting_contrib_obj['bill_or_debate_division']=MP_voting_contrib_soup.find("div", {"class" : "information hidden-xs"}).div.string.strip().lower()
-		MP_voting_contrib_obj['bill_or_debate_MP_vote']="<em>" + MP_voting_contrib_soup.find("div", {"class" : "col-sm-2 commons-vote-label "}).span.string.strip() + "</em>"
+		if MP_voting_contrib_soup.find("a") is not None:
 
-		# 2 date formats in use
-		try:
-			MP_voting_contrib_obj['bill_or_debate_date']=datetime.strptime( MP_voting_contrib_soup.find("div", {"class" : "sitting-date"}).string.strip(), '%d %B %Y %I.%M %p') #4 July 2017 9.35pm
-		except:
-			MP_voting_contrib_obj['bill_or_debate_date']=datetime.strptime( MP_voting_contrib_soup.find("div", {"class" : "sitting-date"}).string.strip(), '%d %B %Y') #4 July 2017
+			MP_voting_contrib_obj['voting_contrib_url']=hansard_url + MP_voting_contrib_soup.a['href']
+			MP_voting_contrib_obj['bill_or_debate_url']=MP_voting_contrib_obj['voting_contrib_url'].split('#')[0]
+			MP_voting_contrib_obj['bill_or_debate_title']=re.sub('[^\040-\176]', '',  MP_voting_contrib_soup.find("div", {"class" : "title single-line"}).span.string.strip())
+			#MP_voting_contrib_obj['bill_or_debate_division']=MP_voting_contrib_soup.find("div", {"class" : "information"}).div.string.strip().lower()
+			MP_voting_contrib_obj['bill_or_debate_division']=MP_voting_contrib_soup.find(string=re.compile("division", re.IGNORECASE)).lower()
+			MP_voting_contrib_obj['bill_or_debate_MP_vote']="<em>" + MP_voting_contrib_soup.find("div", {"class" : "vote-result vote-result-commons"}).string.strip() + "</em>"
 
-		MP_voting_contrib_obj['bill_or_debate_vote_counts']=''
-		for vote_count in MP_voting_contrib_soup.find("div", {"class" : "counts"}).findAll("strong"):
-			if len(MP_voting_contrib_obj['bill_or_debate_vote_counts']) == 0:
-				MP_voting_contrib_obj['bill_or_debate_vote_counts']=re.sub("((ay|no)e?s?)", "<em>\\1</em>", vote_count.string.strip().lower().replace(':', ''), flags=re.IGNORECASE)
-			else:
-				MP_voting_contrib_obj['bill_or_debate_vote_counts']=MP_voting_contrib_obj['bill_or_debate_vote_counts'] + ' and ' + re.sub("((ay|no)e?s?)", "<em>\\1</em>", vote_count.string.strip().lower().replace(':', ''), flags=re.IGNORECASE)
+			# 2 date formats in use
+			try:
+				MP_voting_contrib_obj['bill_or_debate_date']=datetime.strptime( MP_voting_contrib_soup.find("div", {"class" : "sitting-date"}).string.strip(), '%d %B %Y %I.%M %p') #4 July 2017 9.35pm
+			except:
+				MP_voting_contrib_obj['bill_or_debate_date']=datetime.strptime( MP_voting_contrib_soup.find("div", {"class" : "sitting-date"}).string.strip(), '%d %B %Y') #4 July 2017
 
-		# add MP_voting_contrib to array
-		MP_voting_contrib_objs.append(MP_voting_contrib_obj)
+			MP_voting_contrib_obj['bill_or_debate_vote_counts']=''
+			for vote_count in MP_voting_contrib_soup.find("div", {"class" : "counts"}).findAll("strong"):
+				if len(MP_voting_contrib_obj['bill_or_debate_vote_counts']) == 0:
+					MP_voting_contrib_obj['bill_or_debate_vote_counts']=re.sub("((ay|no)e?s?)", "<em>\\1</em>", vote_count.string.strip().lower().replace(':', ''), flags=re.IGNORECASE)
+				else:
+					MP_voting_contrib_obj['bill_or_debate_vote_counts']=MP_voting_contrib_obj['bill_or_debate_vote_counts'] + ' and ' + re.sub("((ay|no)e?s?)", "<em>\\1</em>", vote_count.string.strip().lower().replace(':', ''), flags=re.IGNORECASE)
+
+			# add MP_voting_contrib to array
+			MP_voting_contrib_objs.append(MP_voting_contrib_obj)
+
+			#debug
+			#print "MP_voting_contrib_obj=" + str(MP_voting_contrib_obj)
 
 	# check if there is another page, and loop again if there is
 	try:
@@ -359,7 +431,7 @@ while MP_voting_url is not None:
 	except:
 		next=None
 	if next is not None:
-		MP_voting_url=hansard_url + html.find('li', {"class" :'next'}).a['href']
+		MP_voting_url=hansard_url + soup.find('li', {"class" :'next'}).a['href']
 	else:
 		MP_voting_url=None
 
@@ -375,6 +447,9 @@ try:
 except:
 	#print('ERR: Unable to access "' + MP_EDM_url + '"')
 	MP_EDM_url=None
+
+# debug code
+#MP_EDM_url=None
 
 while MP_EDM_url != None:
 
@@ -399,6 +474,7 @@ while MP_EDM_url != None:
 
 		# extract html
 		MP_EDM_soup=BeautifulSoup(str(MP_EDM), 'html.parser')
+		#print ('MP_EDM_soup=' + MP_EDM_soup.prettify() )
 
 		# assemble EDM object
 		MP_EDM_obj['number']=MP_EDM_soup.find_all('td')[0].a.span.next_sibling
@@ -409,7 +485,7 @@ while MP_EDM_url != None:
 
 		# add MP_voting_contrib to array if new enough
 		#pp.pprint(MP_EDM_obj['date_signed'])
-		if MP_EDM_obj['date_signed'] > startDate:
+		if MP_EDM_obj['date_signed'] >= startDate and MP_EDM_obj['date_signed'] <= endDate:
 			MP_EDM_objs.append(MP_EDM_obj)
 
 			# debug
@@ -447,26 +523,31 @@ if len(MP_spoken_contrib_objs) > 0:
 
 	for MP_spoken_contrib_obj in MP_spoken_contrib_objs:
 
-		# write new debate header and get debate page when list rolls over to new debate
-		if previous_debate is None or previous_debate != MP_spoken_contrib_obj['debate_url']:
-			debate_count = debate_count + 1
-			if len(MP_spoken_contribs_text.strip()) == 0:
-				MP_spoken_contribs_text="<h5>Speeches</h5>" + MP_name + " spoke on the <a href=" + MP_spoken_contrib_obj['debate_url'] + " target=_blank>" + MP_spoken_contrib_obj['debate_title'] + "</a> debate on " + MP_spoken_contrib_obj['debate_date'].strftime('%-d %B') + ": "
-			else:
-				MP_spoken_contribs_text=MP_spoken_contribs_text + "<br>" + MP_name + " spoke on the <a href=" + MP_spoken_contrib_obj['debate_url'] + " target=_blank>" + MP_spoken_contrib_obj['debate_title'] + "</a> debate on " + MP_spoken_contrib_obj['debate_date'].strftime('%-d %B') + ": "
+		if MP_spoken_contrib_obj['detailed_contrib_text'] is not None and len(MP_spoken_contrib_obj['detailed_contrib_text']) > 0:
 
-		# write out debate details re.sub('[^\040-\176]', '', MP_spoken_contrib_detail.get_text().strip())
-		MP_spoken_contribs_text=MP_spoken_contribs_text + '<blockquote>' + re.sub(' +', ' ', MP_spoken_contrib_obj['detailed_contrib_text']).strip() + '</blockquote>'
+			# write new debate header and get debate page when list rolls over to new debate
+			if previous_debate is None or previous_debate != MP_spoken_contrib_obj['debate_url']:
+				debate_count = debate_count + 1
+				if len(MP_spoken_contribs_text.strip()) == 0:
+					MP_spoken_contribs_text="<h5>Speeches</h5>" + MP_name + " spoke on the <a href=" + MP_spoken_contrib_obj['debate_url'] + " target=_blank>" + MP_spoken_contrib_obj['debate_title'] + "</a> debate on " + MP_spoken_contrib_obj['debate_date'].strftime('%-d %B') + ": "
+				else:
+					MP_spoken_contribs_text=MP_spoken_contribs_text + "<br>" + MP_name + " spoke on the <a href=" + MP_spoken_contrib_obj['debate_url'] + " target=_blank>" + MP_spoken_contrib_obj['debate_title'] + "</a> debate on " + MP_spoken_contrib_obj['debate_date'].strftime('%-d %B') + ": "
 
-		# keep track of latest date of all contributions
-		if since==None or MP_spoken_contrib_obj['debate_date'] > since:
-			since=MP_spoken_contrib_obj['debate_date']
+			# debug
+			#print "MP_spoken_contrib_obj['detailed_contrib_text']=" + MP_spoken_contrib_obj['detailed_contrib_text']
 
-		# prepare for next loop
-		previous_debate=MP_spoken_contrib_obj['debate_url']
+			# write out debate details re.sub('[^\040-\176]', '', MP_spoken_contrib_detail.get_text().strip())
+			MP_spoken_contribs_text=MP_spoken_contribs_text + '<blockquote>' + re.sub(' +', ' ', MP_spoken_contrib_obj['detailed_contrib_text']).strip() + '</blockquote>'
+
+			# keep track of latest date of all contributions
+			if since==None or MP_spoken_contrib_obj['debate_date'] > since:
+				since=MP_spoken_contrib_obj['debate_date']
+
+			# prepare for next loop
+			previous_debate=MP_spoken_contrib_obj['debate_url']
 
 	if len(MP_spoken_contrib_objs) == 1:
-		MP_spoken_contrib_count_text= "spoke once"
+		MP_spoken_contrib_count_text= "spoken once"
 	elif  len(MP_spoken_contrib_objs) == 2:
 		MP_spoken_contrib_count_text= "spoken twice"
 	elif  len(MP_spoken_contrib_objs) == 3:
@@ -627,6 +708,10 @@ if len(MP_EDM_objs) > 0:
 	else:
 		MP_EDM_count_text= "supported " + str(len(MP_voting_contrib_objs)) + " early day motions"
 
+# this cludge is intended to make sure the 'since' credential doesn't just crawl along a day at a time when there is no data to retrieve
+if len(MP_spoken_contrib_objs) == 0 and len(MP_voting_contrib_objs) == 0 and len(MP_EDM_objs) == 0 and since < (datetime.now() - timedelta(days=4)):
+	since = endDate
+
 # 5 assemble final JSON string ready for Huginn de-stringifier
 credential={}
 credential[constituency]=since.strftime('%Y-%m-%d')	
@@ -639,12 +724,12 @@ if len(MP_spoken_contrib_objs) > 0 or len(MP_voting_contrib_objs) > 0 or len(MP_
 	extra_links=''
 	if constituency == 'Reading West':	
 		output['wards']='Whitley, Minster'
-		candidate_images=[14671]
+		candidate_images=[14671,26583]
 		extra_links='<li><a href=https://www.theyworkforyou.com/mp/24902/alok_sharma/reading_west target=_blank>' + MP_name + ' at TheyWorkForYou</a></li>' + \
 				"<li><a href=http://www.aloksharma.co.uk/ target=_blank>" + MP_name + "'s website</a></li>"
 	elif constituency == 'Reading East':	
 		output['wards']='Katesgrove, Redlands, Church, Abbey, Park'
-		candidate_images=[15006,14672,14535,14446]
+		candidate_images=[15006,14672,14535,14446,26584]
 		extra_links='<li><a href=https://www.theyworkforyou.com/mp/25691/matt_rodda/reading_east target=_blank>' + MP_name + ' at TheyWorkForYou</a></li>' + \
 				"<li><a href=http://www.mattrodda.net/ target=_blank>" + MP_name + "'s website</a></li>"
 	else:
@@ -654,18 +739,22 @@ if len(MP_spoken_contrib_objs) > 0 or len(MP_voting_contrib_objs) > 0 or len(MP_
 	if len(candidate_images) > 0:
 		header_image='[gallery type="rectangular" size="full" ids="' + str(random.choice(candidate_images)) + '" orderby="rand"]<br>'
 
-	output['title']=	'Parliamentary activity of ' + constituency + ' MP ' + MP_name + ' from ' + startDate.strftime('%-d %B') + ' to ' + since.strftime('%-d %B')
+	if startDate == since :
+		date_string=' on ' +  startDate.strftime('%-d %B')
+	else:
+		date_string=' from ' + startDate.strftime('%-d %B') + ' to ' + since.strftime('%-d %B')
+	
+	output['title']=	'Parliamentary activity of ' + constituency + ' MP ' + MP_name + date_string
 	output['intro_para']=	header_image + constituency.title() + ' MP <a href=' + MP_url + ' target=_blank>' + MP_name + '</a> has ' + \
 				MP_spoken_contrib_count_text + debate_count_text + ', ' + \
 				MP_voting_contrib_count_text + bill_or_debate_count_text + ' and has ' + \
 				MP_EDM_count_text + \
-				' between ' + startDate.strftime('%-d %B') + ' and ' + since.strftime('%-d %B') + '.'
+				date_string + '.'
 	output['body_para']=	MP_spoken_contribs_text.strip() + \
 				MP_voting_contribs_text.strip() + \
 				MP_EDM_text.strip() + \
 				'<br><p style=text-align:right><em>Sourced from <a href=http://www.parliament.uk target=_blank>www.parliament.uk</a></em></p>'
-	output['link_list']=	'<li><a href=' + MP_url + ' target=_blank>' + MP_name + '</a></li>' + extra_links
-
+	output['link_list']=	'<li><a href=' + MP_url + ' target=_blank>' + MP_name + ' at parliament.uk</a></li><li><a href=https://whitleypump.wordpress.com/?s=' + re.sub(' +', '+', MP_name) + ' target=_blank>' + MP_name + ' on the <i>Whitley Pump</i></a></li>' + extra_links
 
 # always write output (including mp_activity_since)
 print (json.dumps(output))

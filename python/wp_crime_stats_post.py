@@ -5,7 +5,8 @@
 import getopt, sys, pprint, copy, re, random
 from types import *
 import requests 		# http://docs.python-requests.org/en/master/
-import mysql.connector 		# https://dev.mysql.com/doc/connector-python/en
+#import mysql.connector 		# https://dev.mysql.com/doc/connector-python/en
+import MySQLdb
 import json
 
 # time and date stuff
@@ -91,7 +92,7 @@ def mysql_sql(query):
 	except:
 		print 'ERR: mysql_sql query "' + query + '" failed.'
 		return None
-	resultset.append(mysql_sql.column_names)
+	resultset.append(zip(*mysql_sql.description)[0])
 	resultset.append(mysql_sql.fetchall())
 	# print resultset
 	mysql_sql.close()
@@ -124,31 +125,37 @@ def convert_list(data):
 # converts mysql_sql output into HTML
 def html_table(data):
 	html_header = None
-	for element in data[0]:
-		if html_header is None:
-			html_header = '<th>' + element + '</th>'
+	n = 0
+	for dataset in data:
+		if n == 0:
+			for element in dataset:
+				if html_header is None:
+					html_header = '<th>' + element + '</th>'
+				else:
+					html_header = html_header + '<th>' + element + '</th>'
+			html_header = '<tr>' + html_header + '</tr>'
+			html_body =  None
 		else:
-			html_header = html_header + '<th>' + element + '</th>'
-	html_header = '<tr>' + html_header + '</tr>'
-	html_body =  None
-	for row in data[1]:
-		html_row = None
-		if row[0].lower() == 'total':
-			td_start = '<th>'
-			td_end = '</th>' 
-		else:
-			td_start = '<td>'
-			td_end = '</td>' 
-		for element in row:
-			if html_row is None:
-				html_row = td_start + str(element) + td_end
-			else:
-				html_row = html_row + td_start + str(element) + td_end
-		if html_body is None:
-			html_body = '<tr>' + html_row + '</tr>'
-		else:
-			html_body = html_body + '<tr>' + html_row + '</tr>'
+			for row in dataset:
+				html_row = None
+				if row[0].lower() == 'total':
+					td_start = '<th>'
+					td_end = '</th>' 
+				else:
+					td_start = '<td>'
+					td_end = '</td>' 
+				for element in row:
+					if html_row is None:
+						html_row = td_start + str(element) + td_end
+					else:
+						html_row = html_row + td_start + str(element) + td_end
+				if html_body is None:
+					html_body = '<tr>' + html_row + '</tr>'
+				else:
+					html_body = html_body + '<tr>' + html_row + '</tr>'
+		n += 1
 	return '<table>'+ html_header + html_body + '</table>'
+		
 
 # calls specified mysql procedure
 def mysql_procedure(procedure, params):
@@ -211,31 +218,23 @@ def mysql_function(function, params):
 
 # expects data as a list of tuples [(1,2,3),(4,5,6)], xvalues as tuples ('a','b','c') and legend (aka series names) as a tuple ('x','y','z')
 def plot_barchart(data, xvalues, series, title, xlabel, ylabel):
-
 	#print "data: " + str(data)
 	#print "series: " + str(series)
 	#print "xvalues: " + str(xvalues)
-
 	# maxwidth and maxheight of plot
 	#plot_width=10
 	#plot_height=10
-	
 	# default title
 	if title is None:
 		title = "Barchart"
-
 	if xlabel is None:
 		xlabel = "Category?"
-
 	if ylabel is None:
 		ylabel = "Number?"
-
 	if series is None:
 		series = ('data')
-
 	if xvalues is None:
 		xvalues = range(len(data[0]))
-
 	# calculate reasonable bar width
 	bar_width = round( 1 / (len(series)+1.0) , 2)
 	#print "bar_width:" + str(bar_width)
@@ -244,10 +243,8 @@ def plot_barchart(data, xvalues, series, title, xlabel, ylabel):
 	#	bar_width = 0.2
 	#if bar_width > 1:
 	#	bar_width = 1
-
 	# x-item range (#columns in table (ie #x values))
 	x_items_index = range(len(xvalues))
-
 	# start creating plot
 	#fig, barplot = plt.subplots(figsize=(plot_width,plot_height))
 	fig, barplot = plt.subplots()
@@ -257,9 +254,7 @@ def plot_barchart(data, xvalues, series, title, xlabel, ylabel):
 	#barplot.set_xticks([ind + (bar_width * (len(data[0])/2) ) for ind in x_items_index])
 	barplot.set_xticks([ind + (bar_width * len(series)/2 ) for ind in x_items_index])
 	barplot.set_xticklabels(xvalues, rotation=90, fontsize='small')
-
 	# work through data; each line assumed to be a 'series' with a 1:1 relationship with rows in 'legend'
-
 	bar_series = []
 	row_count = 0
 	for row in data:
@@ -267,7 +262,6 @@ def plot_barchart(data, xvalues, series, title, xlabel, ylabel):
 		bar_series.append(barplot.bar([ind + (bar_width * (row_count) ) for ind in x_items_index], row, bar_width, color=cm.Set3(float(row_count) / len(series)), label=series[row_count], align='edge', linewidth=0))
 		#print (str(row_count) + ', ' + str(len(series)) + ', ' + str(float(row_count) / len(series)) )
 		row_count += 1
-
 	# add labels to bars
 	(y_bottom, y_top) = barplot.get_ylim()
 	y_height = y_top - y_bottom
@@ -280,29 +274,23 @@ def plot_barchart(data, xvalues, series, title, xlabel, ylabel):
 			else:
 				label_position = height + (y_height * 0.01)
 	       		barplot.text(bar_rect.get_x() + bar_rect.get_width()/1.5, label_position,'%d' % int(height), fontsize='small', ha='center', va='bottom', rotation=90)
-			# print str(height) + ":" + str(label_position)
-
+	# print str(height) + ":" + str(label_position)
 	# create legend (depends on 'label' when setting up bars)
 	barplot.legend(frameon=False,fontsize='small')
-
 	# Hide the right and top spines
 	barplot.spines['right'].set_visible(False)
 	barplot.spines['top'].set_visible(False)
 	# Only show ticks on the left and bottom spines
 	barplot.yaxis.set_ticks_position('left')
 	barplot.xaxis.set_ticks_position('bottom')
-
 	# normalise layout
 	plt.tight_layout()
-
 	#show plot (comment out matplotlib.use('Agg'))
 	#plt.show()
-
 	# print plot to file (requires matplotlib.use('Agg'))
 	filename = plotfile_store + '/' + title.replace(' ','-').replace('/','-').lower() + '-' + datetime.today().strftime('%Y%m%d%H%M%S') + '-' + str(random.randint(1,999999)) + '.png'
 	#print filename
 	plt.savefig(filename)
-	
 	# tell calling function where the plot file is
 	return filename
 
@@ -323,6 +311,7 @@ def rolling_12_month(region):
 		join place on (place.polygon is not null and st_within(police_crime.location_point, place.polygon)) \
 	WHERE  \
 		place.name in (" + sql_region + ") \
+		and place.type = 'ward' \
 	GROUP BY 1 \
 	HAVING \
 		sum( if( str_to_date(police_crime.month, '%Y-%m') between date_add(cast(get_constant('crime-last-updated') as date), interval -2 year) and date_add(cast(get_constant('crime-last-updated') as date), interval -1 year), 1, 0) ) > 0 \
@@ -334,7 +323,7 @@ def rolling_12_month(region):
 	#print output1
 
 	# plot barchart of crime numbers per category in given region for last 2 yrs
-	plot_file = plot_barchart( zip(*output1[1])[1:3], zip(*output1[1])[0], output1[0][1:3], "Crimes per category over last two years in " + english_region,  "Crime categories", "Number of crimes")
+	plot_file = plot_barchart( zip(*output1[1])[1:3], zip(*output1[1])[0], output1[0][1:3], "Crime reports per category over last two years in " + english_region,  "Crime categories", "Number of crime reports")
 
 	# plot barchart of %age change in crimes per category in given region for each of last 2 yrs (ie 3 vs 2 yrs, 2 vs this year)
 	##plot_file = plot_barchart( zip(*output[1])[4:6], zip(*output[1])[0], output[0][4:6], "Percentage change in crimes per category between last 12 months and 12 months before in " + region, "Crime categories", "Percentage")
@@ -351,7 +340,8 @@ def rolling_12_month(region):
 		police_crime \
 		join place on (place.polygon is not null and st_within(police_crime.location_point, place.polygon)) \
 	WHERE  \
-		place.name in (" + sql_region + ")"
+		place.name in (" + sql_region + ") \
+		and place.type = 'ward'"
 
 	output2 = mysql_sql(sql)
 	#print sql
@@ -364,7 +354,9 @@ def rolling_12_month(region):
 	#print total_change
 
 	# create printable table of data (as HTML table)
-	output1[1].extend(output2[1])
+	#output1[1].extend(output2[1])
+	#output1[1] += (output2[1],)
+	output1.extend((output2[1],))
 	html_data_table = html_table(output1)
 
 	# (func called thus : "filename, html_data_table, total_change = rolling_12_month(region)"
@@ -465,7 +457,7 @@ if region is None or user is None or password is None or host is None or databas
 
 # test connection to database
 try:
-	db = mysql.connector.connect(user = user, password = password, host = host, database = database)
+	db = MySQLdb.connect(user = user, passwd = password, host = host, db = database)
 except:
 	print('ERR: Unable to connect to database "' + database + '" with user "' + user + '"' )
 	sys.exit(1)
@@ -485,14 +477,34 @@ elif total_change < 0:
 else:
 	increased_decreased = 'not changed'
 
+# get police neighbourhood details
+sql = "select distinct \
+	  neighbourhood.name, \
+	  upper(neighbourhood.identifier) \
+	from \
+		place ward \
+	    join place region on st_within( ward.centre_point, region.polygon) \
+	    join place neighbourhood on neighbourhood.name like concat('%', ward.name, '%') and \
+	    	( \
+	    		st_intersects( neighbourhood.polygon, region.polygon) \
+				or st_overlaps( neighbourhood.polygon, region.polygon) \
+		    or st_overlaps( neighbourhood.centre_point, region.polygon) \
+		) \
+	where region.name = 'Whitley Pump wider area of interest' \
+	  and ward.type = 'ward' \
+	  and neighbourhood.type = 'police-neighbourhood' \
+	  and lower(ward.name) = lower('" + region + "')"
+
+nbhd_output = mysql_sql(sql)
+
 JSON_string = ' {' + \
 ' "ward":"' + region + '",' + \
-' "title":"Crime statistics for ' + english_region + ' ward in ' +  humanise_date(crime_last_updated) + '",' + \
+' "title":"' + english_region + ' ward reported crime statistics for ' +  humanise_date(crime_last_updated) + '",' + \
 ' "graphic":"[IMG1]",' + \
 ' "intro_para":"Overall reported crime in ' + english_region + ' ward has ' + increased_decreased + ' between the 12 months ending ' + humanise_date(months_ago(crime_last_updated, 12)) + ' and the 12 months ending ' + humanise_date(crime_last_updated) + ', according to crime statistics <a href=https://www.police.uk/ target=_blank>released by the Home Office</a>.",' + \
 ' "body_para":"This table shows the same data as the graph, with a total at the bottom.<br>' +  rolling_12_month_html_data_table + '",' + \
-' "notes_list":"<li><em>Data is sourced from <a href=https://data.police.uk/ target=_blank>data.police.uk</a> who say this data is subject to alteration, and locations are approximated.</em></li><li><em>Minor discrepancies in per-area totals between the <a href=https://www.police.uk/thames-valley/ target=_blank>police mapping tool</a> and that shown here are usually because a crimes <a href=https://data.police.uk/about/#anonymisation target=_blank>anonymised location</a> is given as the middle of a public road forming the boundary between two areas.</em></li><li><em>Changes in crime numbers may be artefactual; a change in category definitions or reporting protocols, for example.</em></li> <li><em>Data may be released with more than a months delay. The data shown here is the <a href=https://data.police.uk/changelog/ target=_blank>most recently released</a> at the time of publication.</em></li><li><em>Police neighbourhood boundaries <a href=https://data.police.uk/data/boundaries/ target=_blank>may change each month</a> and are not the same as ward boundaries. This article uses the more stable ward boundaries.</em></li>",' + \
-' "link_list":"<li><a href=https://www.police.uk/thames-valley/#neighbourhoods target=_blank>Neighbourhood crime statistics</a></li> <li><a href=https://data.police.uk/ target=_blank>Source data</a></li>",' + \
+' "notes_list":"<li><em>Data is sourced from <a href=https://data.police.uk/ target=_blank>data.police.uk</a> who say this data is subject to alteration, and locations are approximated.</em></li><li><em>Minor discrepancies in per-area totals between the <a href=https://www.police.uk/thames-valley/ target=_blank>police mapping tool</a> and that shown here are usually because a crimes <a href=https://data.police.uk/about/#anonymisation target=_blank>anonymised location</a> is given as the middle of a public road forming the boundary between two areas.</em></li><li><em>Changes in crime numbers may be artefactual; a change in category definitions or reporting protocols, for example.</em></li> <li><em>Data may be released with more than a months delay. The data shown here is the <a href=https://data.police.uk/changelog/ target=_blank>most recently released</a> at the time of publication.</em></li><li><em>Police neighbourhood boundaries <a href=https://data.police.uk/data/boundaries/ target=_blank>may change each month</a> and are not the same as ward boundaries. This article uses the more stable ward boundaries.</em></li><li><em>The <a href=https://www.ons.gov.uk/peoplepopulationandcommunity/crimeandjustice target=_blank>Office for National Statistics</a> (ONS), <a href=https://www.justiceinspectorates.gov.uk/hmicfrs/ target=_blank>Her Majestys Inspectorate of Constabulary and Fire and Rescue Services</a> (HMICFRS) and <a href=https://publications.parliament.uk/pa/cm201314/cmselect/cmpubadm/760/76004.htm target=_blank>UK Parliaments Home Affairs Select Committee</a> have criticised the police recorded crime data.</em></li>",' + \
+' "link_list":"<li><a href=https://www.police.uk/thames-valley/' + nbhd_output[1][0][1] + '/crime/ target=_blank>' + nbhd_output[1][0][0] + ' crime map</a></li> <li><a href=https://data.police.uk/ target=_blank>Source data</a></li> <li><a href=https://www.ons.gov.uk/peoplepopulationandcommunity/crimeandjustice target=_blank>Office for National Statistics: crime and justice</a></li> <li><a href=https://www.justiceinspectorates.gov.uk/hmicfrs/police-forces/thames-valley/ target=_blank>Her Majestys Inspectorate of Constabulary and Fire and Rescue Services: Thames Valley Police</a></li>",' + \
 ' "files":"' + rolling_12_month_graph_filename + '"' + \
 ' }'
 

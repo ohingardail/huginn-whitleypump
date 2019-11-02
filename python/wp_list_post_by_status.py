@@ -14,7 +14,7 @@ except getopt.GetoptError as err:
 	print(err)
 	sys.exit(2)
 
-url = 'https://milmanroad.wordpress.com/xmlrpc.php'
+url = 'https://x.wordpress.com/xmlrpc.php'
 user = None
 password = None
 status = 'pending'

@@ -1,6 +1,7 @@
 #! /usr/bin/python
 
-import getopt, sys, pprint, os.path, mimetypes, urlparse, time
+import getopt, sys, pprint, os.path, mimetypes, urlparse, re
+import time as t
 from datetime import *
 import dateutil.parser
 from dateutil.tz import *
@@ -17,7 +18,7 @@ except getopt.GetoptError as err:
 	sys.exit(2)
 
 # hard coded defaults
-url = 'https://milmanroad.wordpress.com/xmlrpc.php'
+url = 'https://x.wordpress.com/xmlrpc.php'
 user = None
 password = None
 status = 'draft'
@@ -52,11 +53,11 @@ for o, a in opts:
 try:
 	wordpress = Client(url, user, password)
 except:
-	time.sleep(10)
+	t.sleep(10)
 	try:
 		wordpress = Client(url, user, password)
 	except:
-		time.sleep(10)
+		t.sleep(10)
 		try:
 			wordpress = Client(url, user, password)
 		except:
@@ -98,22 +99,32 @@ if title is not None and content is not None:
 	# assemble post object (as draft first)
 	new_post = WordPressPost()
 	new_post.status = 'draft'
-	new_post.title = title
-	new_post.content = content
+	new_post.title = title.strip()
+	new_post.content = content.strip()
 	new_post.comment_status = 'open'
 	new_post.ping_status = 'open'
 
 	if post_date is not None and len(post_date.strip()) > 0:
-		 #new_post.date = dateutil.parser.parse(post_date + " " + datetime.now(tzlocal()).tzname())
-		new_post.date = dateutil.parser.parse(post_date)
+		#new_post.date = dateutil.parser.parse(post_date + " " + datetime.now(tzlocal()).tzname())
+		try:
+			new_post.date = dateutil.parser.parse(post_date)
+		except:
+			new_post.date = None
 
-	# categorise post
+	# categorise post using specified values 
 	if categories is not None and len(categories.strip()) > 0:
 		for category in categories.split(','):
 			category_objects = wordpress.call(taxonomies.GetTerms('category', {'search': category, 'orderby': 'count', 'number': 1}))
 			if category_objects != None:
 				for category_object in category_objects:
 					new_post.terms.append(category_object)
+
+	# categorise post using regexp search
+	category_objects = wordpress.call(taxonomies.GetTerms('category'))
+	if category_objects != None:
+		for category_object in category_objects:
+			if re.search('\\b' + re.sub('\s', '\s+', re.sub('[Ss]?$', 's?', category_object.name)) + '\\b', title + ' ' + content, flags=re.IGNORECASE | re.MULTILINE ) != None:
+				new_post.terms.append(category_object)
 
 	# dump out post object
 	#pp = pprint.PrettyPrinter(indent=1,width=80,depth=3)
@@ -124,7 +135,7 @@ if title is not None and content is not None:
 
 	# post-fix post (mainly for WP weirdness about posting directly to 'pending' status)
 	change = False
-	if status == 'pending' and new_post.status != status:
+	if new_post.status != status:
 		new_post.post_status = status
 		change = True
 
